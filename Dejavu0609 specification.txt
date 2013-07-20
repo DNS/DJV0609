@@ -1,0 +1,403 @@
+
+
+Project         : DJV0609 microprocessor specs
+Name            : Dejavu 8-bit CPU specification document
+Status          : Incomplete
+Author          : Daniel Sirait <dns@cpan.org>
+Patch Level     : 10
+Copyright       : Copyright (c) 2009 Daniel Sirait
+License         : Must be distributed only under the terms of `The Artistic License'
+                  You may copy this document in whole or in part as long as you don't 
+                  try to make money off it, or pretend that you wrote it.
+Disclaimer      : I CAN UNDER NO CIRCUMSTANCES BE HELD RESPONSIBLE FOR
+                  ANY CONSEQUENCES OF YOUR USE/MISUSE OF THIS DOCUMENT,
+                  WHATEVER THAT MAY BE (GET BUSTED, WORLD WAR, ETC..).
+
+
+
+
+Dejavu is a 8-bit microprocessor designed by Daniel Sirait in June 2009.
+By November 2009, most of DJV0609 has been specified adequately.
+Although not considered final, it is now stable enough to be implemented.
+Many of this Dejavu µProcessor design are based on PPC, 8088, 8086, 80386, 
+ARM, and 68000 design.
+
+This document explain the design and architecture of DJV0609 µProcessor
+architecture. DJV0609 current patch level is shown in {Patch Level}.
+
+
+The intention for writing this specification is to build new µProcessor that
+can overcome the limitation of IA32, 68000, ARM based µProcessor which is
+mostly limited to 32/64 bit memory addressing or maximum 4 GB of RAM (32 bit).
+
+Dejavu is a basically 8-bit µProcessor. According to Andrew Tanenbaum, that
+processors often had oversized immediates. For instance, he showed that 98% of
+all the constants in a program would fit in 13 bits, yet many CPU design
+dedicated 16 or 32 bits to store them. However, Dejavu can use up to 256-bit both
+signed and unsigned integer (from -2^256 to +2^256) !!!! So you can use the
+processor native integer up to 1.1579 x 10^77. Or 76 digit of numbers.
+This is equal to use 256-bit expensive super computer on a 8-bit very cheap
+µProcessor !! How nifty !!
+
+Dejavu have different characteristics from today modern CPU. Dejavu has:
+    1. Memory:
+        - Register
+        - External memory
+    2. Symbolic Machine:
+        - ALU
+        - Control Unit
+    3. Abstract Machine (Incomplete, TODO)
+        - Complex random procedure ([read] random access to register, external memory)
+        - Decision making subroutine (for defining new instruction)
+        - Define unique name for new instruction (setSymbolicProc)
+        - Build new instruction, & store in external memory as new instruction
+        - Load saved instruction, and refine the instruction based on the current data
+          information in external memory (is previous similar instruction exist, using
+	    simple smoke test, eg: f(n1, ...) = ? )
+
+
+My approach on this design is to combine the element of my experience on
+software and hardware level experience. I've identified several problems in
+software development.
+For example: `int' data types have very different range value on different
+processor architecture. On 8-bit µControler/µProcessor `unsigned int'
+has range 0-255. On 16-bit has range 0-65535. On 32-bit is 0-4294967295.
+
+This is very limited value range. However on 16-bit processor, operating system
+like DOS can use up to 1 MB of physical memory. This can be done by implementing
+linked-list as a reference to memory address (the traditional approach to this
+is by using memory bit-map).
+
+On Win32, Windows can use 2 GB of physical memory by the kernel, and the rest
+of it (2 GB) is left for user space.
+
+However using linked-list as a reference to memory address is a very slow and
+desperate approach. And also not solve all the problem, eg: signed and unsigned
+value. First, there are two possible values of zero, +0 (00000000) and -0
+(10000000). Since zero is neither positive nor negative, both of these
+representations should act the same. This complicates the logic of arithmetic
+for the CPU. Secondly, general arithmetic is also complicated. If 10 is added to
+-56, this must be recast as 10 subtracted by 56. Again, this complicates the
+logic of the CPU. Leading to confusion on most today processor architecture.
+
+Then I've got an idea to add several byte and bit (flag). I found this idea when
+hacking the `perl' core SV struct type (in sv.h file) as defined below:
+
+struct STRUCT_SV {      /* struct sv { */
+    void    *sv_any;    /* pointer to something */
+    U32     sv_refcnt;  /* how many references to us */
+    U32     sv_flags;   /* what we are */
+};
+
+As you can see, SV has `sv_refcnt', so SV hold the length of the data itself,
+it can be very handy at any time, because you don't have to calculate how many
+reference to SV *sv itself.
+
+This idea can be very useful if implemented on hardware level, because it save
+many of wasted bytes, performance, and cost in today processor architecture.
+
+So Dejavu always had odd number length of bytes for transfering data.
+1 bit is for storing [plus/minus] sign (0 for -, and 1 for +). Then 8 bit for
+storing the length of data. And the rest is the data itself.
+
+> The `INTEGER' register format is (1 bit sign flag  + 8 bit data length +
+  data itself {in 8 bit block; maximum 32 block, so resulting 256 bit size
+  integer maximum int/uint}):
+
+     [1 bit]                         +/- sign flag
+     [8 bit data length]             length of data (max: 256 bit size int)
+     [8 bit data...]                 data1
+     ...                             data2
+     ...                             data3
+     ...
+	 ...                             until data32 (total: 256 byte size int/uint, with range from -(2^256) until 2^256)
+
+
+Example 1:
+    1 00000001 00000000   -> represent the value of 0
+    0 00000001 00000000   -> represent the value of -0
+    
+
+Example 2:
+    10000000101000001
+    or by digit grouping: 0 00000001 01000001
+    has the value of the ANSI character `A' (big-endian)
+
+    Meaning:
+
+    1              00000001            01000001
+    [+ sign]       [length of data]    [data]
+
+
+Example 3:
+    0 00000010 00000010 10011010
+    0           00000010            00000010    10011010
+    [- sign]    [length of data]    [data1]     [data2]
+    has the value of of 2 byte (WORD) integer `-666'
+    because 1-byte integer can hold value from 0 to 255
+    and 2-byte integer has value range 0 to 65535
+    so -666 is allocated to 2 byte size of integer.
+
+Of course you can write like this:
+    0 00000011 00000000 00000010 10011010
+    which is also contain `-666'
+
+But you cannot write the format like this:
+    0 00000001 00000010 10011010
+    which is absolutely an error (but not fatal error and throwing an exception), 
+    because the Dejavu µProcessor identify the length of the data first 
+    and store/load the data later.
+    The processor only recognize the first 8 bit data segment,
+    which only contain 00000010.
+    This technique improves the performance of the microprocessor,
+    because the microprocessor will not destroy all data in the register itself.
+
+
+
+> DATA register format (? TODO, INCOMPLETE) :
+    Data register is general purpose register in DJV0609.
+    It can contain integer, string, character, C struct. (Except floating point)
+
+   [128 bit (16 byte) length]  (??? is this needed ?)
+   [data itself {in 8 bit block / 1 byte}]
+   
+   (max length is: 100 0000 0000  or  1 KBytes)
+   
+   eg:
+
+
+> POINTER register (total 512 bit) :
+    [start address (256 bit size)]
+    [end address (256 bit size)]
+
+
+
+
+
+
+DEJAVU µProcessor Architecture:
+
+                  .--------------.
+                  | Input/Output |               External Devices
+                  `------|-------'
+                       /   \
+                     /       \
+-------------------/-----------\-------------------------------------------
+                  |             \
+           .------|-------.      \
+           | Control Unit |       \
+           `--------------'        \
+                /     \             \      Internal Dejavu 8-bit µProcessor
+               /       \             \
+              /         \             \
+             /           \             \
+        .---|---.      .--|-------.    .\------------.
+        |       |      |  Memory  |    |   ABSTRACT  |
+        |  ALU  |      | Register |----|   MACHINE   |
+        |       |      |   RAM    |    |    (TODO)   |
+        `-------'      `----------'    `-------------'
+
+
+   I/O
+	|
+	|
+CPU Controller
+	|
+	|
+INSTRUCTION
+	|
+	|
+ REGISTER (INTEGER & WORD)
+
+
+
+REGISTER:
+    8 integer register, each has 256 byte + 1 bit + 8 bit (ir: i1, i2, i3, i4, ...)
+    8 data register, each has 1 KB size (dr: d1, d2, d3, d4, ...)
+    13 floating point register [TODO] (fr: f1, f2, f3, f4, ...)
+    15 address pointer register (pr: p1, p2, p3, p4, ...)
+    7 stack pointer (sr: s1, s2, s3, s4, ...)
+    1 flag register, 2 byte (fr)
+
+
+IO Controller:
+
+
+REAL MODE:
+    Never access/modify the content of RAM.
+    1/2/4/8/16/32 byte data block
+    256 KB data segment. (Default: 1 KB)
+    
+    eg:
+    [SEGMENT 1]
+        [DATA BLOCK 1]
+        [DATA BLOCK 2]
+        [DATA BLOCK 3]
+        [DATA BLOCK n]
+    [END SEGMENT 1]
+    [SEGMENT 2]
+        [DATA BLOCK 1]
+        [DATA BLOCK 2]
+        [DATA BLOCK 3]
+        [DATA BLOCK n]
+    [END SEGMENT 2]
+
+
+PROTECTED MODE:
+    To access RAM, use INT instruction. (In DJV0609, RAM treated 
+    as regular hardware device like printer/graphic card, etc)
+    Virtual memory (paging) is implemented in kernel/software level.
+    `Custom size' data segment.
+    
+
+
+
+MACHINE CODE (1 to 2 byte length):
+    - TODO LIST !
+
+
+ASSEMBLY INSTRUCTION, (APPROX. 45 INSTRUCTION):
+    NOP
+    PROC
+    ENDPROC
+    CALL
+    RET
+    
+    INT      -> hardware interrupt, eg: `INT 21h', raw access to VGA monitor
+    ISET     -> set interrupt
+    ICLR     -> clear interrupt
+    
+    RLOCK    -> lock register
+    RUNLOCK  -> unlock register
+    
+    ADD      -> ADD dst, ir, ir
+    SUB      -> SUB dst, ir, ir
+    MUL      -> MUL dst, ir, ir
+    DIV      -> DIV dst(ir OR fr), ir, ir
+    MOD      -> MOD dst, ir, ir
+    
+    CSIGN ir    -> convert plus/minus sign, eg: 7 to -7
+    PSIGN       -> set to plus sign
+    MSIGN       -> set to minus sign
+    
+    MOV
+    XCHG reg1, reg2     -> swap register value (must be same type, eg: XCHG w1, w2)
+    BSWAP               -> byte swap, eg: 0011 become 1100 (not very useful op, Dejavu use Big-Endian format)
+    RUNDEF reg          -> unset / destroy register value
+    
+    AMEM $pi, 314                  -> allocate memory for var stored in RAM
+    DMEM $pi                       -> destroy
+    CAT $str, 'World'                -> concatenate string or character
+    LCHOP $msg                     -> chop the first byte
+    RCHOP $msg                     -> chop the last byte
+    
+    AND
+    OR
+    XOR
+    NOT
+
+> BRANCH INSTRUCTIONS: 
+
+    JMP    addr
+    JMPF   addr, [reg|imm]   -> jump to addr if [reg] is 0
+    JMPEQ  addr, [reg|imm], reg1, reg2
+    JMPNE
+    JMPG
+    JMPGE
+    JMPL
+    JMPLE
+    JMPNE
+
+> LOOP INSTRUCTIONS: 
+    
+    LOOP ir, addr			-> stop loop if ir contain 0
+
+    CMP dst, src1, src2        -> if the byte equals then set `dst' to 0
+    INCR reg            -> +1
+    DECR reg            -> -1
+    
+    PUSH
+    PUSHA
+    POP
+    POPA
+    
+    PORT dst, port1       -> get flow of data from specified port
+    PORTSET port1, ???    -> set port identifier
+    PORTCLR port1         -> clear defined port
+    
+    EXEC src         -> execute instruction from src (exclude: ir)
+
+
+
+EXTENDED INTRUCTION SET: (OBSOLETE, BETTER IMPLEMENTED IN HLL, BUT SLOWER, & BIGGER !)
+	FADD
+	FSUB
+	FDIV
+	FMUL
+	FMOD
+	
+
+
+    
+DEJAVU RESERVED INTERRUPT SIGNAL:
+	0h
+	1h
+	2h
+	3h           -> EDBZ, illegal division by zero
+	4h           -> illegal register content
+	5h           -> invalid address location
+	6h           -> illegal jump address
+	...
+	...
+	20h-FFh / (32-2^256)    -> programmable interrupt
+
+
+
+ABSTRACT MACHINE ARCHITECTURE:
+    - TODO
+
+
+BIOS:
+    Define RAM access, with INT.
+    Basic I/O: keyboard, mouse, VGA monitor, COM/LPT port.
+
+
+DJV0609 LIMITATION:
+    - Dejavu may not support floating point, since Dejavu does not have math
+      co-processor design (mostly RISC design). I think floating point calculation
+      can be implemented easily in HLL (FP software emulation).
+    
+    - There's no microcode (Verilog) for DJV0609. It's 100% hardwired instruction
+      set.
+
+
+TODO:
+    - I/O mechanism
+    - BigRat & BigNum calculation (todo: software emulation)
+    - floating point calculation (todo: FP software emulation)
+    
+
+
+
+
+
+
+P.S:  Sorry for my bad english and writing skill. English isn't my native
+      language. I am totally newbie but trying to learn. :-)
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
