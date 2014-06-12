@@ -3,8 +3,8 @@
 Project         : DJV0609 microprocessor specs
 Name            : Dejavu 8-bit CPU specification document
 Status          : Incomplete
-Author          : Daniel Sirait <dns@cpan.org>
-Patch Level     : 10
+Author          : Daniel Sirait <dsirait@aol.com>
+Patch Level     : 11
 Copyright       : Copyright (c) 2009 Daniel Sirait
 License         : Must be distributed only under the terms of `The Artistic License'
                   You may copy this document in whole or in part as long as you don't 
